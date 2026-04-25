@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import deque
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, replace
 import math
 from typing import Deque, Iterable, Mapping, Sequence
 
@@ -54,6 +54,19 @@ class RewardConfig:
     snr_weight: float = 1.0
     outage_weight: float = 1.0
     switch_weight: float = 0.02
+
+
+@dataclass(frozen=True)
+class MovementConfig:
+    model: str = "constant_velocity"
+    speed_mean: float = 4.0
+    speed_std: float = 0.5
+    heading_std_deg: float = 8.0
+    velocity_damping: float = 0.85
+    min_speed: float = 0.25
+    max_speed: float = 8.0
+    position_noise_std: float = 0.0
+    reflect_at_bounds: bool = True
 
 
 @dataclass(frozen=True)
@@ -110,7 +123,20 @@ def make_initial_ue_state(scenario: ScenarioConfig) -> UEState:
     )
 
 
-def advance_ue_state(state: UEState, scenario: ScenarioConfig) -> UEState:
+def advance_ue_state(
+    state: UEState,
+    scenario: ScenarioConfig,
+    movement: MovementConfig = MovementConfig(),
+    rng: np.random.Generator | None = None,
+) -> UEState:
+    if movement.model == "constant_velocity":
+        return _advance_constant_velocity(state, scenario)
+    if movement.model == "stochastic":
+        return _advance_stochastic_velocity(state, scenario, movement, rng)
+    raise ValueError(f"Unknown movement model={movement.model!r}")
+
+
+def _advance_constant_velocity(state: UEState, scenario: ScenarioConfig) -> UEState:
     x_min, x_max = scenario.x_bounds
     y_min, y_max = scenario.y_bounds
     return UEState(
@@ -120,6 +146,65 @@ def advance_ue_state(state: UEState, scenario: ScenarioConfig) -> UEState:
         vy=state.vy,
         t=state.t + 1,
     )
+
+
+def _advance_stochastic_velocity(
+    state: UEState,
+    scenario: ScenarioConfig,
+    movement: MovementConfig,
+    rng: np.random.Generator | None,
+) -> UEState:
+    rng = rng or np.random.default_rng()
+    speed = math.hypot(state.vx, state.vy)
+    if speed <= 1e-9:
+        heading = float(rng.uniform(-math.pi, math.pi))
+        speed = movement.speed_mean
+    else:
+        heading = math.atan2(state.vy, state.vx)
+
+    heading += math.radians(float(rng.normal(0.0, movement.heading_std_deg)))
+    sampled_speed = float(rng.normal(movement.speed_mean, movement.speed_std))
+    target_speed = float(np.clip(sampled_speed, movement.min_speed, movement.max_speed))
+    speed = (
+        movement.velocity_damping * speed
+        + (1.0 - movement.velocity_damping) * target_speed
+    )
+    speed = float(np.clip(speed, movement.min_speed, movement.max_speed))
+
+    vx = speed * math.cos(heading)
+    vy = speed * math.sin(heading)
+    x = state.x + vx + float(rng.normal(0.0, movement.position_noise_std))
+    y = state.y + vy + float(rng.normal(0.0, movement.position_noise_std))
+
+    if movement.reflect_at_bounds:
+        x, vx = _reflect_position_and_velocity(x, vx, scenario.x_bounds)
+        y, vy = _reflect_position_and_velocity(y, vy, scenario.y_bounds)
+    else:
+        x_min, x_max = scenario.x_bounds
+        y_min, y_max = scenario.y_bounds
+        x = float(np.clip(x, x_min, x_max))
+        y = float(np.clip(y, y_min, y_max))
+
+    return UEState(x=float(x), y=float(y), vx=float(vx), vy=float(vy), t=state.t + 1)
+
+
+def _reflect_position_and_velocity(
+    position: float, velocity: float, bounds: Point
+) -> tuple[float, float]:
+    lower, upper = bounds
+    if upper <= lower:
+        return float(lower), 0.0
+
+    reflected_position = float(position)
+    reflected_velocity = float(velocity)
+    while reflected_position < lower or reflected_position > upper:
+        if reflected_position < lower:
+            reflected_position = lower + (lower - reflected_position)
+            reflected_velocity = abs(reflected_velocity)
+        elif reflected_position > upper:
+            reflected_position = upper - (reflected_position - upper)
+            reflected_velocity = -abs(reflected_velocity)
+    return reflected_position, reflected_velocity
 
 
 def euclidean_distance(a: Point, b: Point) -> float:
@@ -270,10 +355,14 @@ def info_dict(
     *,
     t: int,
     ue_xy: Point,
+    ue_velocity_xy: Point,
     bs_xy: Point,
     action: int,
+    optimal_action: int,
     beam_deg: float,
+    optimal_beam_deg: float,
     theta_true: float,
+    angle_error: float,
     distance: float,
     blocked: bool,
     snr_parts: Mapping[str, float],
@@ -285,10 +374,15 @@ def info_dict(
     return {
         "t": int(t),
         "ue_xy": (float(ue_xy[0]), float(ue_xy[1])),
+        "ue_velocity_xy": (float(ue_velocity_xy[0]), float(ue_velocity_xy[1])),
+        "ue_speed": float(math.hypot(ue_velocity_xy[0], ue_velocity_xy[1])),
         "bs_xy": (float(bs_xy[0]), float(bs_xy[1])),
         "true_angle_deg": float(theta_true),
+        "angle_error_deg": float(angle_error),
         "selected_beam_idx": int(action),
         "selected_beam_deg": float(beam_deg),
+        "optimal_beam_idx": int(optimal_action),
+        "optimal_beam_deg": float(optimal_beam_deg),
         "distance": float(distance),
         "blocked": bool(blocked),
         "snr_db": float(snr_parts["snr_db"]),
@@ -318,6 +412,110 @@ def static_world_dict(
             "y_min": float(scenario.y_bounds[0]),
             "y_max": float(scenario.y_bounds[1]),
         },
+    }
+
+
+EPISODE_LOG_COLUMNS = (
+    "episode",
+    "t",
+    "ue_x",
+    "ue_y",
+    "ue_vx",
+    "ue_vy",
+    "ue_speed",
+    "bs_x",
+    "bs_y",
+    "true_angle_deg",
+    "angle_error_deg",
+    "selected_beam_idx",
+    "selected_beam_deg",
+    "optimal_beam_idx",
+    "optimal_beam_deg",
+    "distance",
+    "blocked",
+    "outage",
+    "snr_db",
+    "beam_gain_db",
+    "path_loss_db",
+    "blockage_loss_db",
+    "reward",
+    "snr_term",
+    "outage_penalty",
+    "switch_penalty",
+    "beam_switched",
+    "occlusion_started",
+    "occlusion_ended",
+    "outage_started",
+    "outage_ended",
+)
+
+
+def simulation_metadata(
+    scenario: ScenarioConfig,
+    codebook: Sequence[float] | np.ndarray,
+    channel: ChannelConfig,
+    reward: RewardConfig,
+    movement: MovementConfig = MovementConfig(),
+) -> dict[str, object]:
+    world = static_world_dict(scenario, codebook)
+    return {
+        "scenario": asdict(scenario),
+        "channel": asdict(channel),
+        "reward": asdict(reward),
+        "movement": asdict(movement),
+        "world": {
+            **world,
+            "codebook": np.asarray(world["codebook"], dtype=float).tolist(),
+        },
+    }
+
+
+def episode_log_row(
+    info: Mapping[str, object], episode: int
+) -> dict[str, object]:
+    ue_xy = info["ue_xy"]
+    ue_velocity_xy = info["ue_velocity_xy"]
+    bs_xy = info["bs_xy"]
+    events = info.get("events", {})
+    reward_terms = info.get("reward_terms", {})
+    assert isinstance(ue_xy, tuple)
+    assert isinstance(ue_velocity_xy, tuple)
+    assert isinstance(bs_xy, tuple)
+    assert isinstance(events, Mapping)
+    assert isinstance(reward_terms, Mapping)
+
+    return {
+        "episode": int(episode),
+        "t": int(info["t"]),
+        "ue_x": float(ue_xy[0]),
+        "ue_y": float(ue_xy[1]),
+        "ue_vx": float(ue_velocity_xy[0]),
+        "ue_vy": float(ue_velocity_xy[1]),
+        "ue_speed": float(info["ue_speed"]),
+        "bs_x": float(bs_xy[0]),
+        "bs_y": float(bs_xy[1]),
+        "true_angle_deg": float(info["true_angle_deg"]),
+        "angle_error_deg": float(info["angle_error_deg"]),
+        "selected_beam_idx": int(info["selected_beam_idx"]),
+        "selected_beam_deg": float(info["selected_beam_deg"]),
+        "optimal_beam_idx": int(info["optimal_beam_idx"]),
+        "optimal_beam_deg": float(info["optimal_beam_deg"]),
+        "distance": float(info["distance"]),
+        "blocked": bool(info["blocked"]),
+        "outage": bool(info["outage"]),
+        "snr_db": float(info["snr_db"]),
+        "beam_gain_db": float(info["beam_gain_db"]),
+        "path_loss_db": float(info["path_loss_db"]),
+        "blockage_loss_db": float(info["blockage_loss_db"]),
+        "reward": float(info["reward"]),
+        "snr_term": float(reward_terms.get("snr_term", 0.0)),
+        "outage_penalty": float(reward_terms.get("outage_penalty", 0.0)),
+        "switch_penalty": float(reward_terms.get("switch_penalty", 0.0)),
+        "beam_switched": bool(events.get("beam_switched", False)),
+        "occlusion_started": bool(events.get("occlusion_started", False)),
+        "occlusion_ended": bool(events.get("occlusion_ended", False)),
+        "outage_started": bool(events.get("outage_started", False)),
+        "outage_ended": bool(events.get("outage_ended", False)),
     }
 
 

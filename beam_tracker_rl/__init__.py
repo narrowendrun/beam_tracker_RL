@@ -6,6 +6,7 @@ from beam_tracker_rl.env import BeamTrackingEnv
 from beam_tracker_rl.sim import (
     ChannelConfig,
     ENV_ID,
+    MovementConfig,
     Obstacle,
     RewardConfig,
     ScenarioConfig,
@@ -28,6 +29,7 @@ __all__ = [
     "BeamTrackingEnv",
     "ChannelConfig",
     "ENV_ID",
+    "MovementConfig",
     "Obstacle",
     "RewardConfig",
     "ScenarioConfig",

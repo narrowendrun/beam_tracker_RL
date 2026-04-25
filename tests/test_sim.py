@@ -5,8 +5,10 @@ import numpy as np
 from beam_tracker_rl.sim import (
     ChannelConfig,
     FeedbackHistory,
+    MovementConfig,
     Obstacle,
     RewardConfig,
+    UEState,
     advance_ue_state,
     angle_error_deg,
     build_observation,
@@ -67,3 +69,60 @@ def test_custom_obstacle_tuple_is_supported() -> None:
         obstacles=(Obstacle(x=470.0, y=220.0, w=84.0, h=140.0),),
     )
     assert is_blocked(scenario.bs_xy, (512.0, 380.0), scenario.obstacles)
+
+
+def test_stochastic_motion_is_seed_reproducible_and_bounded() -> None:
+    scenario = make_scenario_config("single_occluder")
+    state = make_initial_ue_state(scenario)
+    movement = MovementConfig(model="stochastic", heading_std_deg=25.0, speed_std=1.5)
+
+    rng_a = np.random.default_rng(123)
+    rng_b = np.random.default_rng(123)
+    rng_c = np.random.default_rng(456)
+
+    path_a = []
+    path_b = []
+    path_c = []
+    state_a = state
+    state_b = state
+    state_c = state
+    for _ in range(12):
+        state_a = advance_ue_state(state_a, scenario, movement, rng_a)
+        state_b = advance_ue_state(state_b, scenario, movement, rng_b)
+        state_c = advance_ue_state(state_c, scenario, movement, rng_c)
+        path_a.append((state_a.x, state_a.y, state_a.vx, state_a.vy))
+        path_b.append((state_b.x, state_b.y, state_b.vx, state_b.vy))
+        path_c.append((state_c.x, state_c.y, state_c.vx, state_c.vy))
+
+    np.testing.assert_allclose(path_a, path_b)
+    assert not np.allclose(path_a, path_c)
+    x_min, x_max = scenario.x_bounds
+    y_min, y_max = scenario.y_bounds
+    assert all(x_min <= x <= x_max and y_min <= y <= y_max for x, y, _, _ in path_a)
+
+
+def test_stochastic_motion_reflects_at_bounds() -> None:
+    scenario = make_scenario_config("los_straight")
+    state = UEState(
+        x=scenario.x_bounds[1] - 0.1,
+        y=380.0,
+        vx=6.0,
+        vy=0.0,
+    )
+    movement = MovementConfig(
+        model="stochastic",
+        speed_mean=6.0,
+        speed_std=0.0,
+        heading_std_deg=0.0,
+        velocity_damping=1.0,
+    )
+
+    next_state = advance_ue_state(
+        state,
+        scenario,
+        movement,
+        np.random.default_rng(123),
+    )
+
+    assert next_state.x <= scenario.x_bounds[1]
+    assert next_state.vx < 0.0

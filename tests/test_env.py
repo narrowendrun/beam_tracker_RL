@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import csv
+import json
+
 import gymnasium as gym
 import numpy as np
 from gymnasium.utils.env_checker import check_env
@@ -77,3 +80,35 @@ def test_static_world_export() -> None:
     assert static_world["obstacles"] == [
         {"x": 470.0, "y": 220.0, "w": 84.0, "h": 140.0}
     ]
+
+
+def test_episode_recording_writes_visualization_data(tmp_path) -> None:
+    env = BeamTrackingEnv(
+        scenario_name="los_straight",
+        max_steps=3,
+        data_dir=tmp_path,
+        run_name="pytest_recording",
+    )
+    try:
+        env.reset()
+        truncated = False
+        while not truncated:
+            _, _, _, truncated, _ = env.step(env.current_action)
+    finally:
+        env.close()
+
+    (run_dir,) = tmp_path.iterdir()
+    episode_dir = run_dir / "episode_0000"
+    metadata = json.loads((episode_dir / "metadata.json").read_text())
+    rows = list(csv.DictReader((episode_dir / "steps.csv").open()))
+
+    assert metadata["world"]["scenario_name"] == "los_straight"
+    assert metadata["movement"]["model"] == "constant_velocity"
+    assert len(rows) == 4
+    assert rows[0]["t"] == "0"
+    assert rows[-1]["t"] == "3"
+    assert "ue_x" in rows[0]
+    assert "ue_vx" in rows[0]
+    assert "snr_db" in rows[0]
+    assert "selected_beam_idx" in rows[0]
+    assert "optimal_beam_idx" in rows[0]

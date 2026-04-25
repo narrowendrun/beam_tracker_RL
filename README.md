@@ -45,7 +45,13 @@ obs, reward, terminated, truncated, info = env.step(env.action_space.sample())
 Tune scenarios directly through environment kwargs:
 
 ```python
-from beam_tracker_rl import BeamTrackingEnv, ChannelConfig, Obstacle, RewardConfig
+from beam_tracker_rl import (
+    BeamTrackingEnv,
+    ChannelConfig,
+    MovementConfig,
+    Obstacle,
+    RewardConfig,
+)
 
 env = BeamTrackingEnv(
     scenario_name="single_occluder",
@@ -53,11 +59,27 @@ env = BeamTrackingEnv(
     num_beams=17,
     channel_config=ChannelConfig(blockage_loss_db=18.0),
     reward_config=RewardConfig(switch_weight=0.01),
+    movement_config=MovementConfig(model="stochastic"),
 )
+```
+
+Movement is deterministic constant velocity by default. Use
+`MovementConfig(model="stochastic", ...)` to add seeded random speed and heading
+variation with reflected bounds.
+
+Record visualization data by passing `data_dir`. Each environment instance
+creates a timestamped run folder containing per-episode `metadata.json` and
+`steps.csv` files with UE position, selected and optimal beams, SNR, outage,
+reward terms, and event flags.
+
+```python
+env = BeamTrackingEnv(data_dir="recordings/manual_run", run_name="eval")
 ```
 
 Open [notebooks/ppo_beam_tracking.ipynb](notebooks/ppo_beam_tracking.ipynb) for
 parameter tuning and PPO training/evaluation.
+Open [notebooks/ppo_from_scratch_beam_tracking.ipynb](notebooks/ppo_from_scratch_beam_tracking.ipynb)
+for a PPO implementation written directly with PyTorch.
 
 ## Test
 

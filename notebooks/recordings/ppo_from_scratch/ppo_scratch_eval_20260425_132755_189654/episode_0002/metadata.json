@@ -1,0 +1,118 @@
+{
+  "scenario": {
+    "name": "single_occluder",
+    "width": 1024,
+    "height": 512,
+    "bs_xy": [
+      512.0,
+      32.0
+    ],
+    "x_bounds": [
+      96.0,
+      928.0
+    ],
+    "y_bounds": [
+      300.0,
+      460.0
+    ],
+    "obstacles": [
+      {
+        "x": 470.0,
+        "y": 220.0,
+        "w": 84.0,
+        "h": 140.0
+      }
+    ],
+    "ue_start_xy": [
+      128.0,
+      380.0
+    ],
+    "ue_velocity_xy": [
+      4.0,
+      0.0
+    ],
+    "max_steps": 192
+  },
+  "channel": {
+    "snr_ref_db": 30.0,
+    "d0": 100.0,
+    "path_loss_exp": 2.2,
+    "blockage_loss_db": 22.0,
+    "beam_3db_deg": 10.0
+  },
+  "reward": {
+    "outage_thresh_db": 5.0,
+    "snr_weight": 1.0,
+    "outage_weight": 1.0,
+    "switch_weight": 0.02
+  },
+  "world": {
+    "width": 1024,
+    "height": 512,
+    "bs_xy": [
+      512.0,
+      32.0
+    ],
+    "obstacles": [
+      {
+        "x": 470.0,
+        "y": 220.0,
+        "w": 84.0,
+        "h": 140.0
+      }
+    ],
+    "codebook": [
+      -60.0,
+      -50.0,
+      -40.0,
+      -30.0,
+      -20.0,
+      -10.0,
+      0.0,
+      10.0,
+      20.0,
+      30.0,
+      40.0,
+      50.0,
+      60.0
+    ],
+    "scenario_name": "single_occluder",
+    "coverage_bounds": {
+      "x_min": 96.0,
+      "x_max": 928.0,
+      "y_min": 300.0,
+      "y_max": 460.0
+    }
+  },
+  "episode": 2,
+  "initial_step": {
+    "episode": 2,
+    "t": 0,
+    "ue_x": 128.0,
+    "ue_y": 380.0,
+    "bs_x": 512.0,
+    "bs_y": 32.0,
+    "true_angle_deg": -47.81555668421123,
+    "angle_error_deg": 2.1844433157887693,
+    "selected_beam_idx": 1,
+    "selected_beam_deg": -50.0,
+    "optimal_beam_idx": 1,
+    "optimal_beam_deg": -50.0,
+    "distance": 518.2277491605404,
+    "blocked": false,
+    "outage": false,
+    "snr_db": 13.707930277373178,
+    "beam_gain_db": -0.572615111987308,
+    "path_loss_db": 15.719454610639515,
+    "blockage_loss_db": 0.0,
+    "reward": 0.0,
+    "snr_term": 0.0,
+    "outage_penalty": 0.0,
+    "switch_penalty": 0.0,
+    "beam_switched": false,
+    "occlusion_started": false,
+    "occlusion_ended": false,
+    "outage_started": false,
+    "outage_ended": false
+  }
+}

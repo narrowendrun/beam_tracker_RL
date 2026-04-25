@@ -8,3 +8,5 @@ runs/
 .ipynb_checkpoints/
 .pytest_cache/
 .ruff_cache/
+baseline_outputs/
+notebooks/recordings/
