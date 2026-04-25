@@ -18,10 +18,6 @@ tests/
 pyproject.toml
 ```
 
-Removed by design: standalone debug scripts, compatibility shims, duplicated
-README/spec folders, generated caches, and pinned `requirements.txt`. Install
-from `pyproject.toml` instead.
-
 ## Install
 
 ```bash
