@@ -1,7 +1,6 @@
 # Beam Tracker RL
 
-Minimal Gymnasium environment for deterministic beam tracking with optional
-rectangular occluders. The agent observes only recent SNR feedback, recent beam
+Minimal Gymnasium environment for beam tracking with rectangular occluders. The agent observes only recent SNR feedback, recent beam
 actions, and normalized range; privileged geometry is returned through `info`
 and episode logs for debugging and plots.
 
