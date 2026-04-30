@@ -84,10 +84,12 @@ class BeamTrackingEnv(gym.Env):
         self.max_distance = max_range_from_bs(self.scenario)
 
         self.action_space = gym.spaces.Discrete(len(self.codebook))
+        # Observation: snr_hist + action_hist + blocked_hist + outage_hist + [range, beam_trend]
+        obs_dim = 4 * self.hist_len + 2
         self.observation_space = gym.spaces.Box(
             low=-1.0,
             high=1.0,
-            shape=(2 * self.hist_len + 1,),
+            shape=(obs_dim,),
             dtype=np.float32,
         )
 
@@ -97,6 +99,7 @@ class BeamTrackingEnv(gym.Env):
         self.current_obs: np.ndarray | None = None
         self.prev_blocked = False
         self.prev_outage = False
+        self.prev_snr_db: float | None = None
         self.episode_log: list[dict[str, Any]] = []
         self._episode_records: list[dict[str, Any]] = []
         self.episode_index = -1
@@ -126,6 +129,7 @@ class BeamTrackingEnv(gym.Env):
         self.current_obs = obs
         self.prev_blocked = bool(info["blocked"])
         self.prev_outage = bool(info["outage"])
+        self.prev_snr_db = float(info["snr_db"])
         self.episode_log = []
         self._episode_records = [info]
         self.episode_index += 1
@@ -144,6 +148,7 @@ class BeamTrackingEnv(gym.Env):
             )
 
         prev_action = self.current_action
+        prev_snr_db = self.prev_snr_db
         self.ue_state = advance_ue_state(
             self.ue_state,
             self.scenario,
@@ -151,7 +156,7 @@ class BeamTrackingEnv(gym.Env):
             self.np_random,
         )
 
-        info, obs = self._evaluate(action=action, prev_action=prev_action)
+        info, obs = self._evaluate(action=action, prev_action=prev_action, prev_snr_db=prev_snr_db)
         reward = float(info["reward"])
         self.episode_log.append(info)
         self._episode_records.append(info)
@@ -160,6 +165,7 @@ class BeamTrackingEnv(gym.Env):
         self.current_obs = obs
         self.prev_blocked = bool(info["blocked"])
         self.prev_outage = bool(info["outage"])
+        self.prev_snr_db = float(info["snr_db"])
 
         terminated = False
         truncated = bool(self.ue_state.t >= self.scenario.max_steps)
@@ -225,6 +231,7 @@ class BeamTrackingEnv(gym.Env):
         self,
         action: int | None,
         prev_action: int | None,
+        prev_snr_db: float | None = None,
     ) -> tuple[dict[str, Any], np.ndarray]:
         assert self.ue_state is not None
 
@@ -255,6 +262,7 @@ class BeamTrackingEnv(gym.Env):
                 "snr_term": 0.0,
                 "outage_penalty": 0.0,
                 "switch_penalty": 0.0,
+                "shaping": 0.0,
                 "reward": 0.0,
             }
             events = {
@@ -264,13 +272,14 @@ class BeamTrackingEnv(gym.Env):
                 "outage_started": False,
                 "outage_ended": False,
             }
-            self.history.reset(snr_parts["snr_db"], selected_action)
+            self.history.reset(snr_parts["snr_db"], selected_action, blocked=blocked, outage=outage)
         else:
             reward_value, reward_terms = compute_reward(
                 snr_db=snr_parts["snr_db"],
                 action=selected_action,
                 prev_action=prev_action,
                 reward=self.reward_config,
+                prev_snr_db=prev_snr_db,
             )
             events = detect_events(
                 prev_action=prev_action,
@@ -280,7 +289,7 @@ class BeamTrackingEnv(gym.Env):
                 prev_outage=self.prev_outage,
                 outage=outage,
             )
-            self.history.append(snr_parts["snr_db"], selected_action)
+            self.history.append(snr_parts["snr_db"], selected_action, blocked=blocked, outage=outage)
 
         obs = build_observation(
             self.history,

@@ -52,7 +52,7 @@ class ChannelConfig:
 class RewardConfig:
     outage_thresh_db: float = 5.0
     snr_weight: float = 1.0
-    outage_weight: float = 1.0
+    outage_weight: float = 3.0   # raised from 1.0 — outage is the main failure mode
     switch_weight: float = 0.02
 
 
@@ -82,17 +82,26 @@ class FeedbackHistory:
     def __init__(self, hist_len: int) -> None:
         self.snr: Deque[float] = deque(maxlen=hist_len)
         self.actions: Deque[int] = deque(maxlen=hist_len)
+        # Blocked and outage history let PPO learn occlusion patterns explicitly.
+        self.blocked: Deque[float] = deque(maxlen=hist_len)
+        self.outage: Deque[float] = deque(maxlen=hist_len)
 
-    def reset(self, snr_db: float, action: int) -> None:
+    def reset(self, snr_db: float, action: int, blocked: bool = False, outage: bool = False) -> None:
         self.snr.clear()
         self.actions.clear()
+        self.blocked.clear()
+        self.outage.clear()
         for _ in range(self.snr.maxlen or 0):
             self.snr.append(float(snr_db))
             self.actions.append(int(action))
+            self.blocked.append(float(blocked))
+            self.outage.append(float(outage))
 
-    def append(self, snr_db: float, action: int) -> None:
+    def append(self, snr_db: float, action: int, blocked: bool = False, outage: bool = False) -> None:
         self.snr.append(float(snr_db))
         self.actions.append(int(action))
+        self.blocked.append(float(blocked))
+        self.outage.append(float(outage))
 
 
 def make_scenario_config(
@@ -306,8 +315,21 @@ def build_observation(
 ) -> np.ndarray:
     snr_hist = [normalize_snr(value) for value in history.snr]
     action_hist = [normalize_action(action, num_beams) for action in history.actions]
+    blocked_hist = list(history.blocked)   # already 0.0/1.0, fits in [-1,1] space
+    outage_hist = list(history.outage)
+
+    # Beam-delta: direction the agent has been steering (positive = toward higher idx).
+    # This gives PPO a notion of "am I chasing the beam left or right?"
+    actions_list = list(history.actions)
+    if len(actions_list) >= 2 and num_beams > 1:
+        raw_delta = (actions_list[-1] - actions_list[0]) / (num_beams - 1)
+        beam_trend = float(np.clip(raw_delta, -1.0, 1.0))
+    else:
+        beam_trend = 0.0
+
     return np.asarray(
-        snr_hist + action_hist + [normalize_range(distance, max_distance)],
+        snr_hist + action_hist + blocked_hist + outage_hist
+        + [normalize_range(distance, max_distance), beam_trend],
         dtype=np.float32,
     )
 
@@ -321,15 +343,26 @@ def compute_reward(
     action: int,
     prev_action: int,
     reward: RewardConfig = RewardConfig(),
+    prev_snr_db: float | None = None,
 ) -> tuple[float, dict[str, float]]:
     snr_term = reward.snr_weight * normalize_snr(snr_db)
     outage_penalty = reward.outage_weight * float(snr_db < reward.outage_thresh_db)
     switch_penalty = reward.switch_weight * float(action != prev_action)
-    value = float(snr_term - outage_penalty - switch_penalty)
+
+    # Potential-based shaping: reward proportional to SNR improvement this step.
+    # This is dense, unbiased gradient signal toward higher SNR beams.
+    # Using Φ(s') - Φ(s) = normalize_snr(snr') - normalize_snr(prev_snr)
+    if prev_snr_db is not None:
+        shaping = 0.5 * (normalize_snr(snr_db) - normalize_snr(prev_snr_db))
+    else:
+        shaping = 0.0
+
+    value = float(snr_term - outage_penalty - switch_penalty + shaping)
     return value, {
         "snr_term": float(snr_term),
         "outage_penalty": float(outage_penalty),
         "switch_penalty": float(switch_penalty),
+        "shaping": float(shaping),
         "reward": value,
     }
 
